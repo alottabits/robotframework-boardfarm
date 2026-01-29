@@ -1,0 +1,158 @@
+[build-system]
+build-backend = "flit_core.buildapi"
+requires = ["flit_core >=3.2,<4"]
+
+[project]
+name = "robotframework-boardfarm"
+authors = [
+    { name = "Various", email = "t&iconnectivityboardfarm@libertyglobal.com" },
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Robot Framework",
+    "Framework :: Robot Framework :: Library",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Telecommunications Industry",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Testing :: Acceptance",
+]
+dynamic = ["version", "description"]
+requires-python = ">=3.11"
+
+dependencies = [
+    "robotframework>=6.0",
+    "boardfarm3>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "darglint2==v1.8.2",
+    "flake8",
+    "flake8-bugbear",
+    "flake8-docstrings",
+    "flake8-rst",
+    "flake8-rst-docstrings",
+    "mypy",
+    "nox",
+    "pre-commit",
+    "pylint",
+    "ruff>=0.4.2",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+]
+doc = [
+    "sphinx",
+    "sphinx-rtd-theme",
+]
+
+[project.scripts]
+bfrobot = "robotframework_boardfarm.cli:main"
+
+[project.urls]
+Source = "https://github.com/lgirdk/robotframework-boardfarm"
+Documentation = "https://github.com/lgirdk/robotframework-boardfarm#readme"
+
+[tool.flit.module]
+name = "robotframework_boardfarm"
+
+[tool.commitizen]
+bump_message = "Bump version to $new_version"
+name = "cz_conventional_commits"
+tag_format = "$version"
+version = "0.1.0"
+version_files = [
+    "robotframework_boardfarm/__init__.py:__version__",
+    "pyproject.toml:version",
+]
+
+[tool.mypy]
+disallow_untyped_defs = true
+ignore_missing_imports = true
+no_strict_optional = true
+pretty = true
+show_error_codes = true
+warn_redundant_casts = true
+warn_unreachable = true
+
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+ignore = [
+    "ANN101",  # annotation of self object
+    "ANN204",  # annotation of __init__()
+    "D203",    # one-blank-line-before-class
+    "D213",    # multi-line-summary-second-line
+    "FBT",     # boolean trap
+    "N",       # naming convention (covered by pylint)
+    "PT003",   # allow scope=function in fixtures
+    "SIM114",  # simplify if-elif
+    "TD",      # TODO highlighter conflict
+    "COM812",  # formatter conflict
+    "ISC001",  # formatter conflict
+]
+select = ["ALL"]
+fixable = ["ALL"]
+unfixable = ["F401"]  # unused imports
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "INP001",  # pytest works this way
+    "S101",    # assert in tests
+    "D103",    # docstrings not mandatory
+    "SLF001",  # private member access in tests
+    "E501",    # line too long
+    "ANN401",  # Any in arguments
+    "PLR2004", # magic values
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
