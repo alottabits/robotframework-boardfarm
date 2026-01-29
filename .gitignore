@@ -148,3 +148,35 @@ Thumbs.db
 
 # Ruff
 .ruff_cache/
+
+# Test results
+results/
+report.html
+report.xml
+style.css
+
+# Text editor temporally files
+*.swp
+
+# Alternate config files
+#*.json
+
+#logs
+logs/
+reports/logs/
+
+# Patch foo
+*.rej
+*.orig
+
+# geckodriver log
+geckodriver.log
+
+# VS Code
+# .vscode/
+
+# embedded images
+*.img
+
+#obsidian
+.obsidian/
