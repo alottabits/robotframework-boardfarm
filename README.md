@@ -11,7 +11,8 @@
 <hr>
 
 `robotframework-boardfarm` is the extension that integrates Boardfarm with Robot Framework.
-It adapts Boardfarm's plugin/runner lifecycle into Robot Framework test execution and exposes convenient keywords for tests.
+It adapts Boardfarm's plugin/runner lifecycle into Robot Framework test execution and provides
+device access keywords for tests.
 
 > **Prerequisites**
 >
@@ -26,8 +27,9 @@ It adapts Boardfarm's plugin/runner lifecycle into Robot Framework test executio
 - [Overview](#overview)
 - [Quick Install](#quick-install)
 - [How It Works](#how-it-works)
-- [Command Line Options](#command-line-options)
-- [Keywords Provided](#keywords-provided)
+- [Command Line Interface](#command-line-interface)
+- [BoardfarmLibrary Keywords](#boardfarmlibrary-keywords)
+- [Writing Tests](#writing-tests)
 - [Environment Requirements](#environment-requirements)
 - [Running Tests - Examples](#running-tests---examples)
 - [Development](#development)
@@ -41,17 +43,17 @@ It adapts Boardfarm's plugin/runner lifecycle into Robot Framework test executio
 
 - **BoardfarmListener**: Manages device lifecycle (deployment at suite start, release at suite end)
 - **BoardfarmLibrary**: Keywords for device access, configuration, and utilities
-- **UseCaseLibrary**: High-level test operation keywords from `boardfarm3.use_cases` (RECOMMENDED)
-- **DeviceMethodLibrary**: Low-level device method keywords (for advanced use cases)
+- **bfrobot CLI**: Command-line tool for running tests with consistent Boardfarm options
 - **Environment Validation**: Tag-based environment requirement filtering
 - **Integration**: Seamless integration with Boardfarm's pluggy hook system
 
 ### Key Design Principle
 
-Keywords in Robot Framework are implemented as **thin wrappers around Boardfarm use_cases**, ensuring:
-- **Single source of truth**: Test logic lives in Boardfarm, not the integration layer
-- **Portability**: Same use cases work for pytest-bdd and Robot Framework
-- **Maintainability**: Changes in Boardfarm automatically available to all frameworks
+Test keywords should be **scenario-aligned** and delegate to `boardfarm3.use_cases`:
+
+- Create keyword libraries in your test project (e.g., `robot/libraries/`)
+- Use the `@keyword` decorator to map clean Python functions to scenario step text
+- This mirrors the pytest-bdd step_defs approach for consistency
 
 ---
 
@@ -78,18 +80,17 @@ pip install -e ".[dev,test]"
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │ Layer 1: Robot Framework Test (.robot)                          │
-│   "Acs Get Parameter Value    ${acs}    ${cpe}    param"        │
+│   Test cases with scenario-aligned keywords                     │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
-│ Layer 2: UseCaseLibrary (thin wrapper)                          │
-│   Discovers boardfarm3.use_cases at runtime                     │
-│   Zero business logic - just parameter passing                  │
+│ Layer 2: Keyword Libraries (your_project/robot/libraries/)      │
+│   @keyword decorator maps to scenario steps                     │
+│   Delegates to boardfarm3.use_cases or direct device access     │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
 │ Layer 3: Boardfarm use_cases (boardfarm3/use_cases/*.py)        │
-│   get_parameter_value(acs, cpe, param) -> str                   │
 │   SINGLE SOURCE OF TRUTH for test operations                    │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
@@ -97,21 +98,6 @@ pip install -e ".[dev,test]"
 │ Layer 4: Device Templates (boardfarm3/templates/*.py)           │
 │   Low-level device operations (nbi.GPV, sw.get_uptime)          │
 └─────────────────────────────────────────────────────────────────┘
-```
-
-### Lifecycle
-
-```
-Robot Framework Test Execution
-         │
-         ▼
-┌────────────────────────────┐
-│   BoardfarmListener        │  ← Lifecycle management
-│   - start_suite()          │     (deploy/release devices)
-│   - end_suite()            │
-│   - start_test()           │  ← Environment validation
-│   - end_test()             │
-└────────────────────────────┘
 ```
 
 ### Lifecycle
@@ -156,7 +142,7 @@ bfrobot --board-name prplos-docker-1 \
 
 ### Consistent CLI Across Tools
 
-All three tools now use the same command-line format:
+All three tools use the same command-line format:
 
 ```bash
 # Boardfarm interactive shell
@@ -206,42 +192,7 @@ inventory_config=./bf_config/boardfarm_config.json" \
 
 ---
 
-## Keywords Architecture
-
-All libraries use **dynamic discovery** to automatically adapt to Boardfarm API changes:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ BoardfarmLibrary                                                │
-│   Scope: Testbed infrastructure                                 │
-│   Keywords: Get Device By Type, Get Boardfarm Config, etc.      │
-└─────────────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────────┐
-│ UseCaseLibrary (RECOMMENDED)                                    │
-│   Scope: High-level test operations                             │
-│   Source: boardfarm3.use_cases modules                          │
-│   Keywords: Acs Get Parameter Value, Cpe Get Cpu Usage, etc.    │
-│   Benefits: Single source of truth, portable, maintainable      │
-└─────────────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────────┐
-│ DeviceMethodLibrary (Advanced)                                  │
-│   Scope: Low-level device methods                               │
-│   Source: Device instances (nbi, gui, sw, hw)                   │
-│   Keywords: Nbi GPV, Sw Get Seconds Uptime, etc.                │
-│   Use when: No use_case exists for the operation                │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Why three libraries?**
-- **BoardfarmLibrary**: Infrastructure keywords for device and config access
-- **UseCaseLibrary**: High-level test operations (RECOMMENDED - matches pytest-bdd step definitions)
-- **DeviceMethodLibrary**: Low-level device access (advanced use cases only)
-
----
-
-## Keywords Provided
-
-### BoardfarmLibrary - Testbed Infrastructure
+## BoardfarmLibrary Keywords
 
 | Keyword | Description |
 |---------|-------------|
@@ -254,79 +205,69 @@ All libraries use **dynamic discovery** to automatically adapt to Boardfarm API 
 | `Get Test Context` | Retrieves a value from test context |
 | `Require Environment` | Asserts environment meets requirement |
 
-### UseCaseLibrary - High-Level Test Operations (RECOMMENDED)
-
-**Dynamically discovered from boardfarm3.use_cases modules:**
-
-| Module | Example Keywords | Description |
-|--------|------------------|-------------|
-| `acs` | `Acs Get Parameter Value`, `Acs Set Parameter Value`, `Acs Initiate Reboot` | TR-069 operations via ACS |
-| `cpe` | `Cpe Get Cpu Usage`, `Cpe Get Seconds Uptime`, `Cpe Factory Reset` | CPE device operations |
-| `voice` | `Voice Call A Phone`, `Voice Answer A Call`, `Voice Disconnect The Call` | SIP/Voice operations |
-| `networking` | `Networking Ping`, `Networking Dns Lookup`, `Networking Http Get` | Network testing |
-| `wifi` | `Wifi Get Ssid`, `Wifi Connect Client To Wifi` | WiFi operations |
-| `dhcp` | `Dhcp Release Lease`, `Dhcp Renew Lease` | DHCP operations |
-
-**Keyword naming convention**: `<Module> <Function Name>`
-- `acs.get_parameter_value()` → `Acs Get Parameter Value`
-- `cpe.get_cpu_usage()` → `Cpe Get Cpu Usage`
-- `voice.call_a_phone()` → `Voice Call A Phone`
-
-### DeviceMethodLibrary - Low-Level Device Methods (Advanced)
-
-Use when no use_case exists for the required operation.
-
-| Device | Component | Example Keywords |
-|--------|-----------|------------------|
-| ACS | nbi | `Nbi GPV`, `Nbi SPV`, `Nbi Reboot` |
-| ACS | gui | `Gui Login`, `Gui Logout` |
-| CPE | sw | `Sw Get Seconds Uptime`, `Sw Reset` |
-| CPE | hw | Hardware-specific methods |
-
-**Generic fallback**:
-| Keyword | Description |
-|---------|-------------|
-| `Call Device Method` | Call any method: `device_type`, `method.path`, `*args` |
-| `Call Component Method` | Call component method: `device_type`, `component`, `method`, `*args` |
-
 ---
 
-## Handling Evolving Boardfarm APIs
+## Writing Tests
 
-When Boardfarm adds new use_cases or methods, they are **automatically available** as keywords:
+### Recommended Approach: Keyword Libraries
 
-```robotframework
+Create scenario-aligned keyword libraries in your test project that delegate to `boardfarm3.use_cases`. This mirrors the pytest-bdd step_defs approach:
+
+**Python Keyword Library** (`robot/libraries/acs_keywords.py`):
+
+```python
+from robot.api.deco import keyword
+from boardfarm3.use_cases import acs as acs_use_cases
+
+class AcsKeywords:
+    ROBOT_LIBRARY_SCOPE = "SUITE"
+
+    @keyword("The CPE is online via ACS")
+    def verify_cpe_online(self, acs, cpe):
+        """Verify CPE connectivity via ACS."""
+        return acs_use_cases.is_cpe_online(acs, cpe)
+
+    @keyword("The ACS initiates a remote reboot of the CPE")
+    def initiate_reboot(self, acs, cpe):
+        """Initiate CPE reboot via ACS."""
+        acs_use_cases.initiate_reboot(acs, cpe)
+```
+
+**Robot Test** (`robot/tests/reboot.robot`):
+
+```robot
 *** Settings ***
-Library    BoardfarmLibrary
-Library    UseCaseLibrary
+Library    robotframework_boardfarm.BoardfarmLibrary
+Library    ../libraries/acs_keywords.py
 
 *** Test Cases ***
-Test Evolving APIs
+UC-12347: Remote CPE Reboot
     ${acs}=    Get Device By Type    ACS
     ${cpe}=    Get Device By Type    CPE
-    
-    # Use case keywords (auto-discovered from boardfarm3.use_cases)
-    ${version}=    Acs Get Parameter Value    ${acs}    ${cpe}    Device.DeviceInfo.SoftwareVersion
-    ${cpu}=    Cpe Get Cpu Usage    ${cpe}
-    
-    # Future use_cases automatically available when Boardfarm updates:
-    # ${new_result}=    Acs New Operation    ${acs}    ${cpe}    args
+    The CPE Is Online Via ACS    ${acs}    ${cpe}
+    The ACS Initiates A Remote Reboot Of The CPE    ${acs}    ${cpe}
 ```
 
----
+### Low-Level Device Access
 
-## Deprecation Handling
+Since keyword libraries are Python code, you have full access to device objects when needed:
 
-Deprecation warnings are handled **by Boardfarm itself**. When Boardfarm methods are deprecated, they emit `DeprecationWarning` via Python's `warnings` module, which automatically appears in Robot Framework output:
-
+```python
+@keyword("Get CPE load average")
+def get_load_avg(self, cpe):
+    """Direct device access when no use_case exists."""
+    return cpe.sw.get_load_avg()
 ```
-WARN: DeprecationWarning: GetParameterValues is deprecated, use GPV instead
-```
 
-This ensures:
-- Consistent warnings across all Boardfarm users (pytest, Robot Framework, direct API)
-- Single source of truth for deprecation status
-- No additional configuration needed in the integration
+### Comparison with pytest-bdd
+
+| pytest-bdd | Robot Framework |
+|------------|-----------------|
+| `@when("step text")` | `@keyword("step text")` |
+| `tests/step_defs/acs_steps.py` | `robot/libraries/acs_keywords.py` |
+| `boardfarm3.use_cases.acs` | `boardfarm3.use_cases.acs` (same) |
+
+Both frameworks use the same `boardfarm3.use_cases` as the single source of truth.
 
 ---
 
@@ -334,7 +275,7 @@ This ensures:
 
 Use tags to specify environment requirements:
 
-```robotframework
+```robot
 *** Test Cases ***
 Test Dual Stack Mode
     [Tags]    env_req:dual_stack
@@ -392,73 +333,29 @@ bfrobot --board-name prplos-docker-1 \
         robot/tests/
 ```
 
-### Skip Boot for Development
+### Example Test Suite
 
-```bash
-bfrobot --board-name prplos-docker-1 \
-        --env-config ./bf_config/boardfarm_env.json \
-        --inventory-config ./bf_config/boardfarm_config.json \
-        --skip-boot \
-        robot/tests/
-```
-
-### With Console Logs and Legacy Mode
-
-```bash
-bfrobot --board-name prplos-docker-1 \
-        --env-config ./bf_config/boardfarm_env.json \
-        --inventory-config ./bf_config/boardfarm_config.json \
-        --legacy \
-        --save-console-logs ./logs/ \
-        --outputdir results \
-        robot/tests/
-```
-
-### Example Test Suite (Recommended - UseCaseLibrary)
-
-```robotframework
+```robot
 *** Settings ***
-Library           BoardfarmLibrary
-Library           UseCaseLibrary
+Library           robotframework_boardfarm.BoardfarmLibrary
+Library           ../libraries/acs_keywords.py
+Library           ../libraries/cpe_keywords.py
 Suite Setup       Log    Starting Boardfarm tests
 Suite Teardown    Log    Completed Boardfarm tests
 
 *** Test Cases ***
-Test CPE Performance
-    [Documentation]    Verify CPE performance using use_case keywords
-    ${cpe}=    Get Device By Type    CPE
-    
-    # Use case keywords (same logic as pytest-bdd step definitions)
-    ${cpu}=    Cpe Get Cpu Usage    ${cpe}
-    ${uptime}=    Cpe Get Seconds Uptime    ${cpe}
-    
-    Should Be True    ${cpu} < 90    CPU usage too high
-    Log    CPU: ${cpu}%, Uptime: ${uptime}s
-
-Test ACS Operations
-    [Documentation]    Test TR-069 parameter operations
+Test CPE Online
+    [Documentation]    Verify CPE is online via ACS
     ${acs}=    Get Device By Type    ACS
     ${cpe}=    Get Device By Type    CPE
-    
-    # Check CPE is online
-    ${online}=    Acs Is Cpe Online    ${acs}    ${cpe}
-    Should Be True    ${online}
-    
-    # Get firmware version
-    ${version}=    Acs Get Parameter Value    ${acs}    ${cpe}
-    ...    Device.DeviceInfo.SoftwareVersion
-    Log    Firmware: ${version}
+    The CPE Is Online Via ACS    ${acs}    ${cpe}
 
-Test Voice Call
-    [Documentation]    Test basic voice call
-    ${phone1}=    Get Device By Type    SIPPhone    index=0
-    ${phone2}=    Get Device By Type    SIPPhone    index=1
-    
-    Voice Call A Phone    ${phone1}    ${phone2}
-    Voice Answer A Call    ${phone2}
-    ${connected}=    Voice Is Call Connected    ${phone1}
-    Should Be True    ${connected}
-    Voice Disconnect The Call    ${phone1}
+Test CPE Reboot
+    [Documentation]    Test remote CPE reboot
+    ${acs}=    Get Device By Type    ACS
+    ${cpe}=    Get Device By Type    CPE
+    The Operator Initiates A Reboot Task On The ACS For The CPE    ${acs}    ${cpe}
+    The CPE Should Have Rebooted    ${cpe}
 
 Test With Environment Requirement
     [Documentation]    Test requiring dual stack
@@ -467,6 +364,12 @@ Test With Environment Requirement
     ${cpe}=    Get Device By Type    CPE
     Log    Test passed with CPE: ${cpe}
 ```
+
+---
+
+## Deprecation Handling
+
+Deprecation warnings are handled **by Boardfarm itself**. When Boardfarm methods are deprecated, they emit `DeprecationWarning` via Python's `warnings` module, which automatically appears in Robot Framework output.
 
 ---
 
@@ -522,20 +425,10 @@ ruff format .
 | **CLI Command** | `pytest --board-name ...` | `bfrobot --board-name ...` |
 | **Entry Point** | pytest plugin | Robot Framework listener |
 | **Device Access** | Fixtures | Keywords |
-| **Test Operations** | Step definitions → use_cases | UseCaseLibrary → use_cases |
+| **Test Operations** | Step definitions → use_cases | Keyword libraries → use_cases |
 | **Environment Req** | `@pytest.mark.env_req` | `[Tags] env_req:...` |
 | **Lifecycle** | pytest hooks | Listener API |
 | **Reports** | pytest-html integration | Robot Framework reports |
-
-### CLI Consistency
-
-All three tools use the same command-line format for boardfarm options:
-
-```bash
-boardfarm --board-name X --env-config Y --inventory-config Z
-pytest   --board-name X --env-config Y --inventory-config Z tests/
-bfrobot  --board-name X --env-config Y --inventory-config Z robot/tests/
-```
 
 ### Framework Portability
 
@@ -551,10 +444,13 @@ def get_firmware(acs, cpe, bf_context):
     bf_context.firmware_version = version
 ```
 
-```robotframework
-# Robot Framework keyword (calls the same use_case)
-${version}=    Acs Get Parameter Value    ${acs}    ${cpe}
-...    Device.DeviceInfo.SoftwareVersion
+```python
+# Robot Framework keyword library
+@keyword("The operator gets the firmware version")
+def get_firmware(self, acs, cpe):
+    return acs_use_cases.get_parameter_value(
+        acs, cpe, "Device.DeviceInfo.SoftwareVersion"
+    )
 ```
 
 ---

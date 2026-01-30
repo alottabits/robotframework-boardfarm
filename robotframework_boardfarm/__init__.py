@@ -1,26 +1,26 @@
 """Robot Framework integration for Boardfarm testbed.
 
-This package provides libraries for accessing Boardfarm, using dynamic
-discovery to automatically adapt to Boardfarm API changes:
+This package provides integration for running Robot Framework tests with Boardfarm:
 
-1. **BoardfarmLibrary**: Testbed infrastructure (DeviceManager, BoardfarmConfig)
-2. **UseCaseLibrary**: High-level test operations from boardfarm3.use_cases (RECOMMENDED)
-3. **DeviceMethodLibrary**: Low-level device methods (for advanced use cases)
+1. **BoardfarmListener**: Lifecycle management (device deployment/release)
+2. **BoardfarmLibrary**: Infrastructure keywords (device access, configuration)
+3. **bfrobot CLI**: Command-line interface for running tests
 
-= Architecture (Use Case-Based - Recommended) =
+= Architecture =
 
-The recommended approach uses UseCaseLibrary which exposes Boardfarm use_cases
-as keywords. This ensures the same test logic works for pytest-bdd and Robot
-Framework with zero duplication:
+The recommended approach is to create scenario-aligned keyword libraries in your
+test project (e.g., boardfarm-bdd/robot/libraries/) that delegate to Boardfarm
+use_cases. This mirrors the pytest-bdd step definitions approach:
 
     ┌─────────────────────────────────────────────────────────────┐
     │ Layer 1: Robot Framework Test (.robot)                      │
-    │   "Acs Get Parameter Value    ${acs}    ${cpe}    param"    │
+    │   Test cases with scenario-aligned keywords                 │
     └───────────────────────────┬─────────────────────────────────┘
                                 │
     ┌───────────────────────────▼─────────────────────────────────┐
-    │ Layer 2: UseCaseLibrary (thin wrapper)                      │
-    │   Discovers use_cases at runtime, zero business logic       │
+    │ Layer 2: Keyword Libraries (your_project/robot/libraries/)  │
+    │   @keyword decorator maps to scenario steps                 │
+    │   Delegates to boardfarm3.use_cases or direct device access │
     └───────────────────────────┬─────────────────────────────────┘
                                 │
     ┌───────────────────────────▼─────────────────────────────────┐
@@ -33,73 +33,48 @@ Framework with zero duplication:
     │   Low-level device operations                               │
     └─────────────────────────────────────────────────────────────┘
 
-= Libraries =
+= BoardfarmLibrary Keywords =
 
-    ┌─────────────────────────────────────────────────────────────┐
-    │ BoardfarmLibrary                                            │
-    │   Scope: Testbed infrastructure                             │
-    │   Keywords: Get Device By Type, Get Boardfarm Config, etc.  │
-    └─────────────────────────────────────────────────────────────┘
-    ┌─────────────────────────────────────────────────────────────┐
-    │ UseCaseLibrary (RECOMMENDED)                                │
-    │   Scope: High-level test operations                         │
-    │   Source: boardfarm3.use_cases modules                      │
-    │   Keywords: Acs Get Parameter Value, Cpe Get Cpu Usage, etc.│
-    │   Benefits: Single source of truth, portable, maintainable  │
-    └─────────────────────────────────────────────────────────────┘
-    ┌─────────────────────────────────────────────────────────────┐
-    │ DeviceMethodLibrary (Advanced)                              │
-    │   Scope: Low-level device methods                           │
-    │   Source: Device instances (nbi, gui, sw, hw)               │
-    │   Keywords: Nbi GPV, Sw Get Seconds Uptime, etc.            │
-    │   Use when: No use_case exists for the operation            │
-    └─────────────────────────────────────────────────────────────┘
+    Get Device By Type      - Get device instance by type (CPE, ACS, etc.)
+    Get Devices By Type     - Get all devices of a type
+    Get Device Manager      - Get DeviceManager instance
+    Get Boardfarm Config    - Get BoardfarmConfig instance
+    Log Step                - Log a test step message
+    Set/Get Test Context    - Store/retrieve values during test
+    Require Environment     - Assert environment meets requirement
 
-= Example Usage (Recommended) =
+= Example Usage =
 
-    robot --listener robotframework_boardfarm.BoardfarmListener:board_name=my-board:env_config=./env.json:inventory_config=./inv.json tests/
+Using bfrobot CLI (recommended):
+
+    bfrobot --board-name my-board \\
+            --env-config ./env.json \\
+            --inventory-config ./inv.json \\
+            robot/tests/
+
+Test file example:
 
     *** Settings ***
-    Library    BoardfarmLibrary
-    Library    UseCaseLibrary
+    Library    robotframework_boardfarm.BoardfarmLibrary
+    Library    ../libraries/acs_keywords.py
 
     *** Test Cases ***
-    Test CPE Performance
-        ${cpe}=    Get Device By Type    CPE
-        ${cpu}=    Cpe Get Cpu Usage    ${cpe}
-        ${uptime}=    Cpe Get Seconds Uptime    ${cpe}
-        Should Be True    ${cpu} < 90
-        Log    CPU: ${cpu}%, Uptime: ${uptime}s
-
-    Test ACS Operations
+    Test CPE Online
         ${acs}=    Get Device By Type    ACS
         ${cpe}=    Get Device By Type    CPE
-        ${version}=    Acs Get Parameter Value    ${acs}    ${cpe}
-        ...    Device.DeviceInfo.SoftwareVersion
-        Log    Firmware: ${version}
-
-    Test Voice Call
-        ${phone1}=    Get Device By Type    SIPPhone    index=0
-        ${phone2}=    Get Device By Type    SIPPhone    index=1
-        Voice Call A Phone    ${phone1}    ${phone2}
-        Voice Answer A Call    ${phone2}
-        Voice Disconnect The Call    ${phone1}
+        The CPE Is Online Via ACS    ${acs}    ${cpe}
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __pypi_url__ = "https://github.com/lgirdk/robotframework-boardfarm"
 
 from robotframework_boardfarm.listener import BoardfarmListener
 from robotframework_boardfarm.library import BoardfarmLibrary
-from robotframework_boardfarm.use_case_library import UseCaseLibrary
-from robotframework_boardfarm.dynamic_device_library import DeviceMethodLibrary
 from robotframework_boardfarm.exceptions import BoardfarmRobotError
 
 __all__ = [
     "BoardfarmListener",
     "BoardfarmLibrary",
-    "UseCaseLibrary",
-    "DeviceMethodLibrary",
     "BoardfarmRobotError",
     "__version__",
 ]
