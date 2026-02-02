@@ -345,18 +345,39 @@ class BoardfarmLibrary:
         return get_listener().device_manager
 
     @keyword("Get Device By Type")
-    def get_device_by_type(self, device_type: str) -> BoardfarmDevice:
+    def get_device_by_type(self, device_type: str, index: int | str | None = None) -> BoardfarmDevice:
         """Get a device by its type name.
 
         Arguments:
-        - device_type: The device type name (e.g., "CPE", "ACS", "LAN", "WAN")
+        - device_type: The device type name (e.g., "CPE", "ACS", "LAN", "WAN", "SIPPhone")
+        - index: Optional index when multiple devices of the same type exist (0-based)
+
+        When index is specified, returns the device at that index from the list of
+        devices of that type. When index is not specified, returns the first/only device.
 
         Example:
         | ${cpe}=    Get Device By Type    CPE
         | ${acs}=    Get Device By Type    ACS
+        | ${phone1}=    Get Device By Type    SIPPhone    index=0
+        | ${phone2}=    Get Device By Type    SIPPhone    index=1
         """
         dm = self.get_device_manager()
         device_class = self._resolve_device_type(device_type)
+
+        if index is not None:
+            # Convert index to int (Robot Framework passes strings)
+            index_int = int(index)
+            # Get all devices and return the one at the specified index
+            devices = dm.get_devices_by_type(device_class)
+            device_list = list(devices.values())
+            if not device_list:
+                msg = f"No devices found of type: {device_type}"
+                raise BoardfarmLibraryError(msg)
+            if index_int < 0 or index_int >= len(device_list):
+                msg = f"Index {index_int} out of range for {device_type} (found {len(device_list)} devices)"
+                raise BoardfarmLibraryError(msg)
+            return device_list[index_int]
+
         return dm.get_device_by_type(device_class)
 
     @keyword("Get Devices By Type")
@@ -483,6 +504,8 @@ class BoardfarmLibrary:
             "WLAN": "boardfarm3.templates.wlan.WLAN",
             "PDU": "boardfarm3.templates.pdu.PDU",
             "TFTP": "boardfarm3.templates.tftp.TFTP",
+            "SIPPHONE": "boardfarm3.templates.sip_phone.SIPPhone",
+            "SIPSERVER": "boardfarm3.templates.sip_server.SIPServer",
         }
 
         if type_name.upper() in type_mapping:
