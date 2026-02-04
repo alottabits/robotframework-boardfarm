@@ -165,6 +165,13 @@ class AcsKeywords:
         return cpe.sw.get_load_avg()
 ```
 
+### Key Principles
+
+1. **Libraries are the single source of truth** - All keywords defined in `robot/libraries/*.py`
+2. **Tests contain no keyword definitions** - Test files call library keywords directly
+3. **Libraries are thin wrappers** - Delegate to `boardfarm3.use_cases`
+4. **Resource files for patterns only** - Setup/teardown and composite patterns, not duplicate keywords
+
 ### Benefits
 
 1. **Mirrors pytest-bdd structure**: `step_defs/` ↔ `libraries/`
@@ -172,6 +179,7 @@ class AcsKeywords:
 3. **Scenario-aligned**: Keywords match test scenario language
 4. **Maintainable**: Changes in one place benefit both frameworks
 5. **Full access**: Keyword libraries have direct access to device objects when needed
+6. **No duplication**: Tests don't redefine what's already in libraries
 
 ---
 

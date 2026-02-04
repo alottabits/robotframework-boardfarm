@@ -58,12 +58,20 @@ bfrobot --board-name my-board \
 
 ## Recommended Approach: Keyword Libraries
 
-For comprehensive test suites, we recommend creating **scenario-aligned keyword libraries**
-in your test project that delegate to `boardfarm3.use_cases`. This approach:
+For comprehensive test suites, create **scenario-aligned keyword libraries**
+in your test project that delegate to `boardfarm3.use_cases`.
 
+### Key Principles
+
+1. **Libraries are the single source of truth** - Define all keywords in `robot/libraries/*.py`
+2. **Tests contain no keyword definitions** - Test files call library keywords directly
+3. **Libraries are thin wrappers** - Delegate to `boardfarm3.use_cases`
+
+This approach:
 - Mirrors pytest-bdd step_defs structure
 - Uses `@keyword` decorator for clean Python-to-keyword mapping
 - Maintains single source of truth in `boardfarm3.use_cases`
+- Avoids duplication and naming conflicts
 
 See the [boardfarm-bdd/robot/libraries/](../../boardfarm-bdd/robot/libraries/) directory
 for a complete example of this pattern.

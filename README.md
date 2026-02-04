@@ -47,13 +47,16 @@ device access keywords for tests.
 - **Environment Validation**: Tag-based environment requirement filtering
 - **Integration**: Seamless integration with Boardfarm's pluggy hook system
 
-### Key Design Principle
+### Key Design Principles
 
-Test keywords should be **scenario-aligned** and delegate to `boardfarm3.use_cases`:
+1. **Libraries are the single source of truth** - All keywords defined in Python libraries
+2. **Tests contain no keyword definitions** - Test files call library keywords directly
+3. **Libraries are thin wrappers** - Delegate to `boardfarm3.use_cases`
 
-- Create keyword libraries in your test project (e.g., `robot/libraries/`)
+Create keyword libraries in your test project (e.g., `robot/libraries/`):
 - Use the `@keyword` decorator to map clean Python functions to scenario step text
 - This mirrors the pytest-bdd step_defs approach for consistency
+- Tests should NOT define local keywords - call library keywords directly
 
 ---
 
