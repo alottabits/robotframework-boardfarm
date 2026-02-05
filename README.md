@@ -41,20 +41,22 @@ device access keywords for tests.
 
 `robotframework-boardfarm` provides:
 
-- **BoardfarmListener**: Manages device lifecycle (deployment at suite start, release at suite end)
-- **BoardfarmLibrary**: Keywords for device access, configuration, and utilities
+- **BoardfarmListener**: Thin interface for testbed lifecycle (deployment at suite start, release at suite end)
+- **BoardfarmLibrary**: Keywords for device access and utilities
 - **bfrobot CLI**: Command-line tool for running tests with consistent Boardfarm options
-- **Environment Validation**: Tag-based environment requirement filtering
 - **Integration**: Seamless integration with Boardfarm's pluggy hook system
 
 ### Key Design Principles
 
-1. **Libraries are the single source of truth** - All keywords defined in Python libraries
-2. **Tests contain no keyword definitions** - Test files call library keywords directly
-3. **Libraries are thin wrappers** - Delegate to `boardfarm3.use_cases`
+1. **BoardfarmListener is a thin lifecycle interface** - It only handles device deployment and release, not test filtering or selection
+2. **Device objects are the single source of truth** - All testbed data (IP addresses, phone numbers, credentials, network configuration) comes from device object properties, never from hard-coded variables
+3. **Tests check their own preconditions** - Tests verify required devices are available and skip themselves if requirements aren't met
+4. **Libraries are thin wrappers** - Keyword libraries delegate to `boardfarm3.use_cases`
+5. **No hard-coded testbed configuration** - Resource files contain only true constants (timeouts, TR-069 paths), not testbed-specific values
 
 Create keyword libraries in your test project (e.g., `robot/libraries/`):
 - Use the `@keyword` decorator to map clean Python functions to scenario step text
+- Extract all device data from device objects (e.g., `phone.number`, `sipcenter.ipv4_addr`)
 - This mirrors the pytest-bdd step_defs approach for consistency
 - Tests should NOT define local keywords - call library keywords directly
 
@@ -105,11 +107,18 @@ pip install -e ".[dev,test]"
 
 ### Lifecycle
 
+The **BoardfarmListener** is a thin interface between Robot Framework and Boardfarm's testbed:
+
 1. **Suite Start**: BoardfarmListener deploys devices via Boardfarm hooks
-2. **Test Start**: Environment requirements are validated, contingency checks run
-3. **Test Execution**: Keywords access devices and configuration
-4. **Test End**: Cleanup and logging
-5. **Suite End**: Devices are released
+2. **Test Execution**: Tests query available devices and check their own preconditions
+3. **Suite End**: BoardfarmListener releases devices
+
+**Important**: The listener does NOT make test selection decisions. Tests are responsible for:
+- Querying available devices via `Get Device By Type` / `Get Devices By Type`
+- Checking if required devices are available
+- Skipping themselves with `Skip` / `Skip If` when requirements aren't met
+
+This keeps the listener focused on one job (testbed lifecycle) while tests remain self-documenting about their requirements.
 
 ---
 
@@ -201,16 +210,94 @@ inventory_config=./bf_config/boardfarm_config.json" \
 |---------|-------------|
 | `Get Device Manager` | Returns the DeviceManager instance |
 | `Get Device By Type` | Gets device by type string (e.g., "CPE", "ACS") |
-| `Get Devices By Type` | Gets all devices of a type |
+| `Get Devices By Type` | Gets all devices of a type (returns dict) |
 | `Get Boardfarm Config` | Returns the BoardfarmConfig instance |
 | `Log Step` | Logs a test step message |
 | `Set Test Context` | Stores a value in test context |
 | `Get Test Context` | Retrieves a value from test context |
-| `Require Environment` | Asserts environment meets requirement |
+
+---
+
+## Device Data Principles
+
+**All testbed-specific data comes from device objects**, not hard-coded variables or configuration files.
+
+### Why This Matters
+
+- **Portability**: Tests work on any testbed without modification
+- **Single source of truth**: Device objects contain accurate, live configuration
+- **No duplication**: Eliminates hard-coded values that become stale
+
+### Examples
+
+```robot
+*** Test Cases ***
+Test Voice Call
+    # ✅ CORRECT: Get device properties from objects
+    ${phones}=    Get Devices By Type    SIPPhone
+    ${phone_count}=    Get Length    ${phones}
+    Skip If    ${phone_count} < 2    Requires at least 2 SIP phones
+    
+    @{phone_list}=    Get Dictionary Values    ${phones}
+    ${phone_a}=    Set Variable    ${phone_list}[0]
+    ${phone_b}=    Set Variable    ${phone_list}[1]
+    
+    # Phone number comes FROM the device object
+    ${phone_a_number}=    Evaluate    $phone_a.number
+    Log    Phone A number: ${phone_a_number}
+    
+    # ❌ WRONG: Hard-coded phone numbers
+    # ${phone_number}=    Set Variable    1000
+```
+
+### What Should NOT Be Hard-Coded
+
+| Data | Where It Comes From |
+|------|---------------------|
+| Phone numbers | `phone.number` property |
+| IP addresses | `device.ipv4_addr`, `device.ipv6_addr` |
+| SIP domain | `sipcenter.domain` or `sipcenter.name` |
+| Credentials | `device.username`, `device.password` |
+| Network subnets | Device interface properties |
+
+### What Can Be Constants
+
+| Data | Reason |
+|------|--------|
+| Timeouts | Sensible defaults (can be overridden) |
+| TR-069 parameter paths | Standard paths that don't change per testbed |
+| Test tags | Organizational metadata |
 
 ---
 
 ## Writing Tests
+
+### Test Structure: Check Preconditions First
+
+Tests should verify that required devices are available before proceeding:
+
+```robot
+*** Test Cases ***
+UC-12348: Voice Call Test
+    [Documentation]    Requires 2 SIP phones
+    [Tags]    voice    requires-2-phones
+    
+    # Step 1: Check device availability
+    ${phones}=    Get Devices By Type    SIPPhone
+    ${phone_count}=    Get Length    ${phones}
+    Skip If    ${phone_count} < 2
+    ...    Test requires 2 SIP phones, testbed has ${phone_count}
+    
+    # Step 2: Get devices and extract properties FROM objects
+    @{phone_list}=    Get Dictionary Values    ${phones}
+    ${caller}=    Set Variable    ${phone_list}[0]
+    ${callee}=    Set Variable    ${phone_list}[1]
+    
+    # Step 3: Execute test using device properties
+    ${caller_number}=    Evaluate    $caller.number
+    Log    Caller number: ${caller_number}
+    # ... rest of test
+```
 
 ### Recommended Approach: Keyword Libraries
 
@@ -271,31 +358,6 @@ def get_load_avg(self, cpe):
 | `boardfarm3.use_cases.acs` | `boardfarm3.use_cases.acs` (same) |
 
 Both frameworks use the same `boardfarm3.use_cases` as the single source of truth.
-
----
-
-## Environment Requirements
-
-Use tags to specify environment requirements:
-
-```robot
-*** Test Cases ***
-Test Dual Stack Mode
-    [Tags]    env_req:dual_stack
-    # Test runs only if environment supports dual stack
-
-Test With JSON Requirement
-    [Tags]    env_req:{"environment_def":{"board":{"eRouter_Provisioning_mode":["dual"]}}}
-    # Test runs only if JSON requirement is met
-```
-
-### Preset Names
-
-| Preset | Description |
-|--------|-------------|
-| `dual_stack` | Requires dual stack provisioning mode |
-| `ipv4_only` | Requires IPv4 only provisioning mode |
-| `ipv6_only` | Requires IPv6 only provisioning mode |
 
 ---
 
