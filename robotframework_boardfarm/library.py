@@ -1,7 +1,7 @@
 """Robot Framework keyword library for Boardfarm testbed management.
 
 This module provides keywords for accessing Boardfarm's testbed infrastructure
-(DeviceManager, BoardfarmConfig) using dynamic discovery where possible.
+(DeviceManager, BoardfarmConfig).
 
 Example:
     *** Settings ***
@@ -15,7 +15,6 @@ Example:
 
 from __future__ import annotations
 
-import inspect
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -47,14 +46,9 @@ class BoardfarmLibrary:
     - DeviceManager: for accessing deployed devices
     - BoardfarmConfig: for accessing configuration
 
-    Methods on these objects are dynamically discovered, so new methods
-    added to Boardfarm will be automatically available.
-
-    = Architecture =
-
-    This library complements DeviceMethodLibrary:
-    - BoardfarmLibrary: Testbed infrastructure (DeviceManager, Config)
-    - DeviceMethodLibrary: Device instance methods (ACS, CPE, etc.)
+    Keyword libraries in the test project (Layer 2) use these keywords
+    to obtain device instances, then delegate to boardfarm3.use_cases
+    (Layer 3) for test operations.
 
     = Example =
 
@@ -65,271 +59,20 @@ class BoardfarmLibrary:
     | Test Device Access
     |     ${dm}=    Get Device Manager
     |     ${cpe}=    Get Device By Type    CPE
-    |     ${mode}=    Config Get Prov Mode
+    |     ${config}=    Get Boardfarm Config
     """
 
     ROBOT_LIBRARY_SCOPE = "GLOBAL"
     ROBOT_LIBRARY_VERSION = "0.1.0"
     ROBOT_LIBRARY_DOC_FORMAT = "ROBOT"
 
-    # Components to introspect for dynamic keywords
-    _INTROSPECT_COMPONENTS = {
-        "device_manager": "Dm",  # DeviceManager methods -> "Dm <Method>"
-        "boardfarm_config": "Config",  # BoardfarmConfig methods -> "Config <Method>"
-    }
-
-    # Methods to exclude from dynamic discovery (internal/private)
-    _EXCLUDED_METHODS = {
-        # Common Python object methods
-        "items", "keys", "values", "get", "pop", "update", "copy", "clear",
-        # Internal methods we don't want exposed
-        "register_device", "unregister_device",
-    }
-
     def __init__(self) -> None:
         """Initialize the Boardfarm library."""
         self._context: dict[str, Any] = {}
         self._device_type_cache: dict[str, type] = {}
-        self._keyword_cache: dict[str, tuple[str, str, Any]] = {}  # keyword -> (component, method, obj)
 
     # =========================================================================
-    # Dynamic Library Protocol
-    # =========================================================================
-
-    def get_keyword_names(self) -> list[str]:
-        """Return list of available keywords (Robot Framework dynamic library API).
-
-        Keywords are dynamically discovered from:
-        - DeviceManager methods (prefixed with "Dm")
-        - BoardfarmConfig methods (prefixed with "Config")
-        - Plus utility keywords defined in this class
-        """
-        keywords = []
-
-        # Add utility keywords (decorated with @keyword)
-        for name in dir(self):
-            method = getattr(self, name, None)
-            if callable(method) and hasattr(method, "robot_name"):
-                keywords.append(method.robot_name)
-
-        # Add dynamic keywords from testbed components
-        try:
-            listener = get_listener()
-            for attr_name, prefix in self._INTROSPECT_COMPONENTS.items():
-                obj = getattr(listener, attr_name, None)
-                if obj is not None:
-                    keywords.extend(self._discover_keywords(obj, prefix))
-        except Exception:
-            # Listener not ready - return only utility keywords
-            pass
-
-        return keywords
-
-    def _discover_keywords(self, obj: Any, prefix: str) -> list[str]:
-        """Discover keywords from an object's public methods."""
-        keywords = []
-        for name in dir(obj):
-            if name.startswith("_"):
-                continue
-            if name in self._EXCLUDED_METHODS:
-                continue
-            method = getattr(obj, name, None)
-            if callable(method) and not isinstance(method, type):
-                kw_name = f"{prefix} {self._method_to_keyword_name(name)}"
-                keywords.append(kw_name)
-                self._keyword_cache[kw_name.lower()] = (prefix.lower(), name, None)
-        return keywords
-
-    def _method_to_keyword_name(self, method_name: str) -> str:
-        """Convert Python method name to Robot Framework keyword style.
-
-        Examples:
-            get_device_by_type -> Get Device By Type
-            GPV -> GPV
-            get_prov_mode -> Get Prov Mode
-        """
-        # Handle already uppercase names (like GPV, SPV)
-        if method_name.isupper():
-            return method_name
-
-        # Convert snake_case to Title Case
-        words = method_name.split("_")
-        return " ".join(word.capitalize() for word in words)
-
-    def run_keyword(self, name: str, args: list[Any], kwargs: dict[str, Any] | None = None) -> Any:
-        """Execute a keyword (Robot Framework dynamic library API).
-
-        Note: Deprecation warnings are handled by Boardfarm itself.
-        When Boardfarm methods emit DeprecationWarning, they appear
-        in Robot Framework output automatically.
-        """
-        if kwargs is None:
-            kwargs = {}
-
-        name_lower = name.lower()
-
-        # Check if it's a utility keyword
-        for attr_name in dir(self):
-            method = getattr(self, attr_name, None)
-            if callable(method) and hasattr(method, "robot_name"):
-                if method.robot_name.lower() == name_lower:
-                    return method(*args, **kwargs)
-
-        # Check if it's a dynamic keyword
-        if name_lower in self._keyword_cache:
-            prefix, method_name, _ = self._keyword_cache[name_lower]
-            return self._run_dynamic_keyword(prefix, method_name, args, kwargs)
-
-        # Try to discover and run (in case cache is stale)
-        listener = get_listener()
-        for attr_name, prefix in self._INTROSPECT_COMPONENTS.items():
-            if name_lower.startswith(prefix.lower() + " "):
-                obj = getattr(listener, attr_name, None)
-                if obj is not None:
-                    method_part = name[len(prefix) + 1:]  # Remove prefix and space
-                    method_name = self._keyword_to_method_name(method_part)
-                    if hasattr(obj, method_name):
-                        method = getattr(obj, method_name)
-                        return method(*args, **kwargs)
-
-        msg = f"Unknown keyword: {name}"
-        raise BoardfarmLibraryError(msg)
-
-    def _run_dynamic_keyword(
-        self, prefix: str, method_name: str, args: list[Any], kwargs: dict[str, Any]
-    ) -> Any:
-        """Execute a dynamically discovered keyword."""
-        listener = get_listener()
-
-        # Map prefix to attribute
-        prefix_to_attr = {v.lower(): k for k, v in self._INTROSPECT_COMPONENTS.items()}
-        attr_name = prefix_to_attr.get(prefix)
-        if not attr_name:
-            msg = f"Unknown prefix: {prefix}"
-            raise BoardfarmLibraryError(msg)
-
-        obj = getattr(listener, attr_name, None)
-        if obj is None:
-            msg = f"Component not available: {attr_name}"
-            raise BoardfarmLibraryError(msg)
-
-        method = getattr(obj, method_name, None)
-        if method is None:
-            msg = f"Method not found: {method_name} on {attr_name}"
-            raise BoardfarmLibraryError(msg)
-
-        return method(*args, **kwargs)
-
-    def _keyword_to_method_name(self, keyword_name: str) -> str:
-        """Convert Robot Framework keyword to Python method name.
-
-        Examples:
-            Get Device By Type -> get_device_by_type
-            GPV -> GPV
-        """
-        # Handle uppercase keywords (like GPV)
-        if keyword_name.isupper():
-            return keyword_name
-
-        # Convert Title Case to snake_case
-        return "_".join(word.lower() for word in keyword_name.split())
-
-    def get_keyword_documentation(self, name: str) -> str:
-        """Return keyword documentation (Robot Framework dynamic library API)."""
-        name_lower = name.lower()
-
-        # Check utility keywords
-        for attr_name in dir(self):
-            method = getattr(self, attr_name, None)
-            if callable(method) and hasattr(method, "robot_name"):
-                if method.robot_name.lower() == name_lower:
-                    return inspect.getdoc(method) or ""
-
-        # Check dynamic keywords
-        if name_lower in self._keyword_cache:
-            prefix, method_name, _ = self._keyword_cache[name_lower]
-            return self._get_dynamic_documentation(prefix, method_name)
-
-        return ""
-
-    def _get_dynamic_documentation(self, prefix: str, method_name: str) -> str:
-        """Get documentation for a dynamically discovered keyword."""
-        try:
-            listener = get_listener()
-            prefix_to_attr = {v.lower(): k for k, v in self._INTROSPECT_COMPONENTS.items()}
-            attr_name = prefix_to_attr.get(prefix)
-            if attr_name:
-                obj = getattr(listener, attr_name, None)
-                if obj:
-                    method = getattr(obj, method_name, None)
-                    if method:
-                        doc = inspect.getdoc(method) or ""
-                        sig = self._get_method_signature(method)
-                        return f"{doc}\n\nSignature: {method_name}{sig}"
-        except Exception:
-            pass
-        return f"Dynamically discovered method: {prefix}.{method_name}"
-
-    def _get_method_signature(self, method: Any) -> str:
-        """Get method signature as string."""
-        try:
-            sig = inspect.signature(method)
-            return str(sig)
-        except (ValueError, TypeError):
-            return "(...)"
-
-    def get_keyword_arguments(self, name: str) -> list[str]:
-        """Return keyword arguments (Robot Framework dynamic library API)."""
-        name_lower = name.lower()
-
-        # Check utility keywords
-        for attr_name in dir(self):
-            method = getattr(self, attr_name, None)
-            if callable(method) and hasattr(method, "robot_name"):
-                if method.robot_name.lower() == name_lower:
-                    return self._extract_arguments(method)
-
-        # Check dynamic keywords
-        if name_lower in self._keyword_cache:
-            prefix, method_name, _ = self._keyword_cache[name_lower]
-            return self._get_dynamic_arguments(prefix, method_name)
-
-        return []
-
-    def _extract_arguments(self, method: Any) -> list[str]:
-        """Extract argument names from a method."""
-        try:
-            sig = inspect.signature(method)
-            args = []
-            for param_name, param in sig.parameters.items():
-                if param_name == "self":
-                    continue
-                if param.default is inspect.Parameter.empty:
-                    args.append(param_name)
-                else:
-                    args.append(f"{param_name}={param.default!r}")
-            return args
-        except (ValueError, TypeError):
-            return ["*args", "**kwargs"]
-
-    def _get_dynamic_arguments(self, prefix: str, method_name: str) -> list[str]:
-        """Get arguments for a dynamically discovered keyword."""
-        try:
-            listener = get_listener()
-            prefix_to_attr = {v.lower(): k for k, v in self._INTROSPECT_COMPONENTS.items()}
-            attr_name = prefix_to_attr.get(prefix)
-            if attr_name:
-                obj = getattr(listener, attr_name, None)
-                if obj:
-                    method = getattr(obj, method_name, None)
-                    if method:
-                        return self._extract_arguments(method)
-        except Exception:
-            pass
-        return ["*args", "**kwargs"]
-
-    # =========================================================================
-    # Utility Keywords (Robot Framework specific, not from Boardfarm)
+    # Keywords
     # =========================================================================
 
     @keyword("Get Device Manager")
@@ -365,9 +108,7 @@ class BoardfarmLibrary:
         device_class = self._resolve_device_type(device_type)
 
         if index is not None:
-            # Convert index to int (Robot Framework passes strings)
             index_int = int(index)
-            # Get all devices and return the one at the specified index
             devices = dm.get_devices_by_type(device_class)
             device_list = list(devices.values())
             if not device_list:

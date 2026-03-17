@@ -94,13 +94,24 @@ class TestBoardfarmLibraryWithListener:
 
         lib = BoardfarmLibrary()
 
-        # Patch the listener getter to raise error
         with patch(
-            "robotframework_boardfarm.library.BoardfarmLibrary._get_listener",
+            "robotframework_boardfarm.library.get_listener",
             side_effect=BoardfarmListenerError("No listener"),
         ):
             with pytest.raises(BoardfarmListenerError):
                 lib.get_device_manager()
+
+    def test_get_device_manager_with_listener(self) -> None:
+        """Test get_device_manager with mocked listener."""
+        lib = BoardfarmLibrary()
+
+        mock_dm = MagicMock()
+        mock_listener = MagicMock()
+        mock_listener.device_manager = mock_dm
+
+        with patch("robotframework_boardfarm.library.get_listener", return_value=mock_listener):
+            result = lib.get_device_manager()
+            assert result is mock_dm
 
     def test_get_boardfarm_config_with_listener(self) -> None:
         """Test get_boardfarm_config with mocked listener."""
@@ -110,19 +121,6 @@ class TestBoardfarmLibraryWithListener:
         mock_listener = MagicMock()
         mock_listener.boardfarm_config = mock_config
 
-        with patch.object(lib, "_get_listener", return_value=mock_listener):
+        with patch("robotframework_boardfarm.library.get_listener", return_value=mock_listener):
             result = lib.get_boardfarm_config()
             assert result is mock_config
-
-    def test_get_provisioning_mode_with_listener(self) -> None:
-        """Test get_provisioning_mode with mocked listener."""
-        lib = BoardfarmLibrary()
-
-        mock_config = MagicMock()
-        mock_config.get_prov_mode.return_value = "dual"
-        mock_listener = MagicMock()
-        mock_listener.boardfarm_config = mock_config
-
-        with patch.object(lib, "_get_listener", return_value=mock_listener):
-            result = lib.get_provisioning_mode()
-            assert result == "dual"

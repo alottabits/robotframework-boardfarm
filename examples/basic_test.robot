@@ -28,16 +28,6 @@ Test Boardfarm Config
     ${config}=    Get Boardfarm Config
     Log    Boardfarm config: ${config}
 
-Test Provisioning Mode
-    [Documentation]    Verify we can get the provisioning mode.
-    ${mode}=    Get Provisioning Mode
-    Log    Provisioning mode: ${mode}
-
-Test Device Config
-    [Documentation]    Verify we can get device-specific config.
-    ${board_config}=    Get Device Config    board
-    Log    Board config: ${board_config}
-
 Test Context Storage
     [Documentation]    Verify test context storage works.
     Set Test Context    test_key    test_value

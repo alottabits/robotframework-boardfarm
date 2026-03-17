@@ -2,7 +2,7 @@
 
 import pytest
 
-from robotframework_boardfarm.utils import ContextStorage, is_env_matching
+from robotframework_boardfarm.utils import is_env_matching
 
 
 class TestIsEnvMatching:
@@ -75,42 +75,3 @@ class TestIsEnvMatching:
         assert is_env_matching(test_req, bf_env) is False
 
 
-class TestContextStorage:
-    """Tests for ContextStorage class."""
-
-    def test_set_and_get(self) -> None:
-        """Test setting and getting values."""
-        ctx = ContextStorage()
-        ctx["key"] = "value"
-        assert ctx["key"] == "value"
-
-    def test_get_with_default(self) -> None:
-        """Test get with default value."""
-        ctx = ContextStorage()
-        assert ctx.get("missing", "default") == "default"
-        assert ctx.get("missing") is None
-
-    def test_contains(self) -> None:
-        """Test contains check."""
-        ctx = ContextStorage()
-        ctx["key"] = "value"
-        assert "key" in ctx
-        assert "missing" not in ctx
-
-    def test_clear(self) -> None:
-        """Test clearing context."""
-        ctx = ContextStorage()
-        ctx["key1"] = "value1"
-        ctx["key2"] = "value2"
-        ctx.clear()
-        assert "key1" not in ctx
-        assert "key2" not in ctx
-
-    def test_items_keys_values(self) -> None:
-        """Test items, keys, values methods."""
-        ctx = ContextStorage()
-        ctx["key1"] = "value1"
-        ctx["key2"] = "value2"
-        assert set(ctx.keys()) == {"key1", "key2"}
-        assert set(ctx.values()) == {"value1", "value2"}
-        assert dict(ctx.items()) == {"key1": "value1", "key2": "value2"}

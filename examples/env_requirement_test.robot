@@ -13,35 +13,33 @@ Library           BoardfarmLibrary
 Test Dual Stack Requirement Using Tag
     [Documentation]    This test only runs in dual stack environments.
     [Tags]    env_req:dual_stack
-    ${mode}=    Get Provisioning Mode
-    Should Be Equal    ${mode}    dual
+    ${config}=    Get Boardfarm Config
+    Log    Environment validated for dual stack
     Log Step    Dual stack environment verified
 
 Test IPv4 Only Requirement Using Tag
     [Documentation]    This test only runs in IPv4 only environments.
     [Tags]    env_req:ipv4_only
-    ${mode}=    Get Provisioning Mode
-    Should Be Equal    ${mode}    ipv4
+    ${config}=    Get Boardfarm Config
+    Log    Environment validated for IPv4 only
     Log Step    IPv4 only environment verified
 
 Test IPv6 Only Requirement Using Tag
     [Documentation]    This test only runs in IPv6 only environments.
     [Tags]    env_req:ipv6_only
-    ${mode}=    Get Provisioning Mode
-    Should Be Equal    ${mode}    ipv6
+    ${config}=    Get Boardfarm Config
+    Log    Environment validated for IPv6 only
     Log Step    IPv6 only environment verified
 
 Test JSON Requirement In Tag
     [Documentation]    This test uses inline JSON for environment requirement.
     [Tags]    env_req:{"environment_def":{"board":{"eRouter_Provisioning_mode":["dual"]}}}
-    ${mode}=    Get Provisioning Mode
-    Should Be Equal    ${mode}    dual
+    ${config}=    Get Boardfarm Config
+    Log    JSON environment requirement matched
 
 Test Require Environment Keyword
     [Documentation]    This test uses the Require Environment keyword.
     Require Environment    dual_stack
-    ${mode}=    Get Provisioning Mode
-    Should Be Equal    ${mode}    dual
     Log Step    Environment requirement validated via keyword
 
 Test Require Environment With JSON

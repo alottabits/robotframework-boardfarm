@@ -80,10 +80,15 @@ pip install -e ".[dev,test]"
 
 ## How It Works
 
-### Architecture (Four-Layer Abstraction)
+### Architecture (Five-Layer Abstraction)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│ Layer 0: System Level Use Cases (.md — docs as code)            │
+│   Requirement use cases driving test scenarios                   │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ drives
+┌───────────────────────────▼─────────────────────────────────────┐
 │ Layer 1: Robot Framework Test (.robot)                          │
 │   Test cases with scenario-aligned keywords                     │
 └───────────────────────────┬─────────────────────────────────────┘
@@ -91,7 +96,7 @@ pip install -e ".[dev,test]"
 ┌───────────────────────────▼─────────────────────────────────────┐
 │ Layer 2: Keyword Libraries (your_project/robot/libraries/)      │
 │   @keyword decorator maps to scenario steps                     │
-│   Delegates to boardfarm3.use_cases or direct device access     │
+│   Delegates to boardfarm3.use_cases (thin wrapper)              │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
