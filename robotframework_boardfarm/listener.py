@@ -8,6 +8,7 @@ The listener handles:
 - Device release at suite end
 - Environment requirement validation at test start
 - Contingency checks before test execution
+- Per-test teardown stack (LIFO cleanup of state-changing keywords)
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import logging
 import logging.config
 import sys
 from argparse import Namespace
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from boardfarm3.lib.boardfarm_config import (
@@ -116,10 +118,19 @@ def _parse_option_value(name: str, value: str) -> Any:
 
 
 class BoardfarmListener:
-    """Robot Framework listener for Boardfarm device lifecycle management.
+    """Robot Framework listener for Boardfarm lifecycle and per-test cleanup.
 
-    This listener integrates with Robot Framework's test execution lifecycle
-    to deploy and release Boardfarm devices automatically.
+    This listener integrates with Robot Framework's test execution lifecycle to:
+
+    * Deploy devices at suite start and release them at suite end.
+    * Validate environment requirements and run contingency checks before
+      each test.
+    * Maintain a **per-test teardown stack**: keyword libraries call
+      ``register_teardown()`` after state-changing operations, and
+      ``end_test()`` drains the stack in LIFO order — mirroring the
+      ``yield``-based cleanup in pytest-bdd.
+    * Refresh the CPE console and clear the per-test library context
+      after every test.
 
     All boardfarm command-line options can be passed as listener arguments,
     using either underscores or dashes (e.g., skip_boot or skip-boot).
@@ -178,6 +189,9 @@ skip_boot=true:save_console_logs=./logs:ignore_devices=wan,lan"
         self._deployment_data: dict[str, Any] = {}
         self._teardown_data: dict[str, Any] = {}
         self._is_deployed = False
+        self._teardown_stack: list[
+            tuple[str, Callable[..., Any], tuple[Any, ...], dict[str, Any]]
+        ] = []
 
         self._logger = logging.getLogger("boardfarm.robotframework")
 
@@ -320,15 +334,84 @@ skip_boot=true:save_console_logs=./logs:ignore_devices=wan,lan"
 
                 raise SkipExecution(str(e)) from e
 
+    def register_teardown(
+        self,
+        description: str,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Push a cleanup action onto the per-test teardown stack.
+
+        Called by keyword libraries after any state-changing operation.
+        Actions execute in LIFO order when the test ends via ``end_test``.
+
+        Args:
+            description: Human-readable label for logging.
+            func: Callable to invoke during teardown.
+            *args: Positional arguments for *func*.
+            **kwargs: Keyword arguments for *func*.
+        """
+        self._teardown_stack.append((description, func, args, kwargs))
+        self._logger.debug("Registered teardown: %s", description)
+
     def end_test(self, data: TestCase, result: ResultCase) -> None:
-        """Cleanup after test execution.
+        """Execute per-test cleanup after test execution.
+
+        Three phases run in order, each wrapped in its own error handling
+        so that a failure in one phase does not prevent the others:
+
+        1. Drain the teardown stack in LIFO order.
+        2. Refresh the CPE console connection (cross-cutting).
+        3. Clear the per-test context on BoardfarmLibrary.
 
         Args:
             data: Test case data from Robot Framework
             result: Test case result object
         """
-        # Future: capture logs, cleanup context, etc.
-        pass
+        self._drain_teardown_stack()
+        self._refresh_cpe_console()
+        self._clear_library_context()
+
+    def _drain_teardown_stack(self) -> None:
+        """Execute all registered teardowns in LIFO order, then clear."""
+        errors: list[str] = []
+        while self._teardown_stack:
+            description, func, args, kwargs = self._teardown_stack.pop()
+            try:
+                func(*args, **kwargs)
+                self._logger.info("Teardown OK: %s", description)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "Teardown failed: %s: %s", description, exc,
+                )
+                errors.append(f"{description}: {exc}")
+        if errors:
+            self._logger.warning("%d teardown(s) had errors", len(errors))
+
+    def _refresh_cpe_console(self) -> None:
+        """Reconnect the CPE console so it is usable for the next test."""
+        if self._device_manager is None:
+            return
+        try:
+            from boardfarm3.templates.cpe.cpe import CPE
+
+            cpe = self._device_manager.get_device_by_type(CPE)
+            cpe.hw.disconnect_from_consoles()
+            cpe.hw.connect_to_consoles(getattr(cpe, "device_name", "cpe"))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _clear_library_context(self) -> None:
+        """Reset the per-test context dict on BoardfarmLibrary."""
+        try:
+            from robot.libraries.BuiltIn import BuiltIn
+
+            lib = BuiltIn().get_library_instance("BoardfarmLibrary")
+            if lib is not None:
+                lib.clear_test_context()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _deploy_devices(self) -> None:
         """Deploy boardfarm devices to the environment."""

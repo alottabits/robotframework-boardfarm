@@ -21,20 +21,27 @@ class TestBoardfarmListener:
                 skip_contingency_checks="true",
             )
 
-        assert listener._board_name == "test-board"
-        assert listener._env_config_path == "/path/to/env.json"
-        assert listener._inventory_config_path == "/path/to/inv.json"
-        assert listener._skip_boot is True
-        assert listener._skip_contingency_checks is True
+        assert listener.get_option("board_name") == "test-board"
+        assert listener.get_option("env_config") == "/path/to/env.json"
+        assert listener.get_option("inventory_config") == "/path/to/inv.json"
+        assert listener.get_option("skip_boot") is True
+        assert listener.get_option("skip_contingency_checks") is True
 
     def test_initialization_defaults(self) -> None:
         """Test listener initializes with default values."""
         with patch("robotframework_boardfarm.listener.get_plugin_manager"):
             listener = BoardfarmListener()
 
-        assert listener._board_name == ""
-        assert listener._skip_boot is False
-        assert listener._skip_contingency_checks is False
+        assert listener.get_option("board_name") == ""
+        assert listener.get_option("skip_boot") is False
+        assert listener.get_option("skip_contingency_checks") is False
+
+    def test_initialization_creates_empty_teardown_stack(self) -> None:
+        """Test that init creates an empty teardown stack."""
+        with patch("robotframework_boardfarm.listener.get_plugin_manager"):
+            listener = BoardfarmListener()
+
+        assert listener._teardown_stack == []
 
     def test_cmdline_args_property(self) -> None:
         """Test cmdline_args property returns correct Namespace."""
@@ -115,3 +122,148 @@ class TestBoardfarmListener:
 
         with pytest.raises(DeviceNotInitializedError):
             _ = listener.boardfarm_config
+
+
+class TestTeardownStack:
+    """Tests for the per-test teardown stack on BoardfarmListener."""
+
+    @pytest.fixture()
+    def listener(self) -> BoardfarmListener:
+        with patch("robotframework_boardfarm.listener.get_plugin_manager"):
+            return BoardfarmListener()
+
+    def test_register_teardown_adds_to_stack(self, listener: BoardfarmListener) -> None:
+        """Registered actions appear on the stack."""
+        func = MagicMock()
+        listener.register_teardown("desc", func, 1, key="val")
+
+        assert len(listener._teardown_stack) == 1
+        desc, fn, args, kwargs = listener._teardown_stack[0]
+        assert desc == "desc"
+        assert fn is func
+        assert args == (1,)
+        assert kwargs == {"key": "val"}
+
+    def test_drain_executes_lifo(self, listener: BoardfarmListener) -> None:
+        """Stack drains in LIFO order."""
+        order: list[str] = []
+        listener.register_teardown("first", lambda: order.append("first"))
+        listener.register_teardown("second", lambda: order.append("second"))
+        listener.register_teardown("third", lambda: order.append("third"))
+
+        listener._drain_teardown_stack()
+
+        assert order == ["third", "second", "first"]
+        assert listener._teardown_stack == []
+
+    def test_drain_passes_args(self, listener: BoardfarmListener) -> None:
+        """Teardown callable receives the args captured at registration time."""
+        func = MagicMock()
+        listener.register_teardown("action", func, "a", "b", x=42)
+
+        listener._drain_teardown_stack()
+
+        func.assert_called_once_with("a", "b", x=42)
+
+    def test_drain_continues_after_failure(self, listener: BoardfarmListener) -> None:
+        """A failing teardown does not prevent subsequent teardowns."""
+        first = MagicMock()
+        failing = MagicMock(side_effect=RuntimeError("boom"))
+        last = MagicMock()
+
+        listener.register_teardown("first", first)
+        listener.register_teardown("failing", failing)
+        listener.register_teardown("last", last)
+
+        listener._drain_teardown_stack()
+
+        last.assert_called_once()
+        failing.assert_called_once()
+        first.assert_called_once()
+
+    def test_drain_on_empty_stack_is_noop(self, listener: BoardfarmListener) -> None:
+        """Draining an empty stack does nothing."""
+        listener._drain_teardown_stack()
+        assert listener._teardown_stack == []
+
+    def test_end_test_drains_stack(self, listener: BoardfarmListener) -> None:
+        """end_test drains the teardown stack."""
+        func = MagicMock()
+        listener.register_teardown("cleanup", func, 99)
+
+        data = MagicMock()
+        result = MagicMock()
+
+        with patch.object(listener, "_refresh_cpe_console"):
+            with patch.object(listener, "_clear_library_context"):
+                listener.end_test(data, result)
+
+        func.assert_called_once_with(99)
+        assert listener._teardown_stack == []
+
+    def test_end_test_calls_refresh_and_clear(
+        self, listener: BoardfarmListener,
+    ) -> None:
+        """end_test invokes CPE console refresh and context clearing."""
+        data = MagicMock()
+        result = MagicMock()
+
+        with patch.object(listener, "_refresh_cpe_console") as mock_refresh:
+            with patch.object(listener, "_clear_library_context") as mock_clear:
+                listener.end_test(data, result)
+
+        mock_refresh.assert_called_once()
+        mock_clear.assert_called_once()
+
+    def test_refresh_cpe_console_no_device_manager(
+        self, listener: BoardfarmListener,
+    ) -> None:
+        """_refresh_cpe_console is a no-op when device manager is None."""
+        assert listener._device_manager is None
+        listener._refresh_cpe_console()
+
+    def test_refresh_cpe_console_with_cpe(
+        self, listener: BoardfarmListener,
+    ) -> None:
+        """_refresh_cpe_console disconnects and reconnects."""
+        mock_cpe = MagicMock()
+        mock_cpe.device_name = "my-cpe"
+        mock_dm = MagicMock()
+        mock_dm.get_device_by_type.return_value = mock_cpe
+        listener._device_manager = mock_dm
+
+        with patch(
+            "robotframework_boardfarm.listener.BoardfarmListener._refresh_cpe_console",
+            wraps=listener._refresh_cpe_console,
+        ):
+            listener._refresh_cpe_console()
+
+        mock_cpe.hw.disconnect_from_consoles.assert_called_once()
+        mock_cpe.hw.connect_to_consoles.assert_called_once_with("my-cpe")
+
+    def test_clear_library_context(self, listener: BoardfarmListener) -> None:
+        """_clear_library_context calls clear_test_context on the library."""
+        mock_lib = MagicMock()
+
+        with patch(
+            "robotframework_boardfarm.listener.BoardfarmListener._clear_library_context",
+            wraps=listener._clear_library_context,
+        ):
+            with patch(
+                "robot.libraries.BuiltIn.BuiltIn",
+            ) as MockBuiltIn:
+                MockBuiltIn.return_value.get_library_instance.return_value = mock_lib
+                listener._clear_library_context()
+
+        mock_lib.clear_test_context.assert_called_once()
+
+    def test_clear_library_context_swallows_import_error(
+        self, listener: BoardfarmListener,
+    ) -> None:
+        """_clear_library_context does not raise when Robot is not available."""
+        with patch(
+            "robotframework_boardfarm.listener.BoardfarmListener._clear_library_context",
+            wraps=listener._clear_library_context,
+        ):
+            with patch.dict("sys.modules", {"robot.libraries.BuiltIn": None}):
+                listener._clear_library_context()

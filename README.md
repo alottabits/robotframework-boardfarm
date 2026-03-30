@@ -29,6 +29,7 @@ device access keywords for tests.
 - [How It Works](#how-it-works)
 - [Command Line Interface](#command-line-interface)
 - [BoardfarmLibrary Keywords](#boardfarmlibrary-keywords)
+- [Per-Test Cleanup (Teardown Stack)](#per-test-cleanup-teardown-stack)
 - [Writing Tests](#writing-tests)
 - [Environment Requirements](#environment-requirements)
 - [Running Tests - Examples](#running-tests---examples)
@@ -41,18 +42,19 @@ device access keywords for tests.
 
 `robotframework-boardfarm` provides:
 
-- **BoardfarmListener**: Thin interface for testbed lifecycle (deployment at suite start, release at suite end)
+- **BoardfarmListener**: Lifecycle management (deployment/release) and automatic per-test cleanup via a LIFO teardown stack
 - **BoardfarmLibrary**: Keywords for device access and utilities
 - **bfrobot CLI**: Command-line tool for running tests with consistent Boardfarm options
 - **Integration**: Seamless integration with Boardfarm's pluggy hook system
 
 ### Key Design Principles
 
-1. **BoardfarmListener is a thin lifecycle interface** - It only handles device deployment and release, not test filtering or selection
+1. **BoardfarmListener manages lifecycle *and* cleanup** - It deploys/releases devices at suite level and automatically drains a per-test teardown stack after every test
 2. **Device objects are the single source of truth** - All testbed data (IP addresses, phone numbers, credentials, network configuration) comes from device object properties, never from hard-coded variables
 3. **Tests check their own preconditions** - Tests verify required devices are available and skip themselves if requirements aren't met
 4. **Libraries are thin wrappers** - Keyword libraries delegate to `boardfarm3.use_cases`
-5. **No hard-coded testbed configuration** - Resource files contain only true constants (timeouts, TR-069 paths), not testbed-specific values
+5. **Cleanup is implicit, not manual** - Keyword libraries register teardown actions at the point of state change; tests never need explicit `[Teardown]` keywords for reverting state
+6. **No hard-coded testbed configuration** - Resource files contain only true constants (timeouts, TR-069 paths), not testbed-specific values
 
 Create keyword libraries in your test project (e.g., `robot/libraries/`):
 - Use the `@keyword` decorator to map clean Python functions to scenario step text
@@ -112,18 +114,20 @@ pip install -e ".[dev,test]"
 
 ### Lifecycle
 
-The **BoardfarmListener** is a thin interface between Robot Framework and Boardfarm's testbed:
+The **BoardfarmListener** manages both the testbed lifecycle and per-test cleanup:
 
-1. **Suite Start**: BoardfarmListener deploys devices via Boardfarm hooks
-2. **Test Execution**: Tests query available devices and check their own preconditions
-3. **Suite End**: BoardfarmListener releases devices
+1. **Suite Start** (`start_suite`): Deploy devices via Boardfarm hooks
+2. **Test Start** (`start_test`): Validate environment requirements, run contingency checks
+3. **Test Execution**: Tests query available devices and check their own preconditions. Keyword libraries register cleanup actions via `register_teardown()` as they change state.
+4. **Test End** (`end_test`): Automatically drain the teardown stack (LIFO), refresh the CPE console, and clear per-test context
+5. **Suite End** (`end_suite`): Release devices
 
 **Important**: The listener does NOT make test selection decisions. Tests are responsible for:
 - Querying available devices via `Get Device By Type` / `Get Devices By Type`
 - Checking if required devices are available
 - Skipping themselves with `Skip` / `Skip If` when requirements aren't met
 
-This keeps the listener focused on one job (testbed lifecycle) while tests remain self-documenting about their requirements.
+Tests do **not** need `[Teardown]` keywords for state cleanup — that is handled automatically by the listener's teardown stack.
 
 ---
 
@@ -223,6 +227,111 @@ inventory_config=./bf_config/boardfarm_config.json" \
 
 ---
 
+## Per-Test Cleanup (Teardown Stack)
+
+The `BoardfarmListener` provides a **per-test teardown stack** that automatically reverses state-changing operations when a test ends. This mirrors the `yield`-based teardown in pytest-bdd, ensuring that every test leaves the testbed in a clean state for the next test.
+
+### How It Works
+
+1. A keyword library performs a state-changing operation (e.g., registers a SIP phone, changes a password, stops a TR-069 client)
+2. Immediately after the operation, it calls `register_teardown()` to push the corresponding reverse action onto the stack
+3. When the test ends, `BoardfarmListener.end_test()` pops and executes every registered action in **LIFO (last-in, first-out) order**
+4. After the teardown stack is drained, the listener also refreshes the CPE console connection and clears the per-test context
+
+### `register_teardown()` API
+
+```python
+from robotframework_boardfarm.listener import get_listener
+
+listener = get_listener()
+listener.register_teardown(
+    "Descriptive label for logs",   # description
+    some_callable,                  # function to call during teardown
+    arg1, arg2,                     # positional args forwarded to the callable
+    key=value,                      # keyword args forwarded to the callable
+)
+```
+
+### Keyword Library Pattern
+
+The recommended pattern is to register teardown actions in the same keyword that creates the state change:
+
+```python
+import logging
+from robot.api.deco import keyword, library
+from boardfarm3.use_cases import voice as voice_use_cases
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _get_listener():
+    """Lazy import to avoid circular dependency at module load time."""
+    from robotframework_boardfarm.listener import get_listener
+    return get_listener()
+
+
+@library(scope="SUITE")
+class VoiceKeywords:
+
+    @keyword("Register SIP Phone")
+    def register_phone(self, server, phone, name=None):
+        voice_use_cases.phone_register(server, phone)
+
+        # Register cleanup: kill the phone when the test ends
+        try:
+            _get_listener().register_teardown(
+                f"Cleanup phone {name or 'unknown'}",
+                self._cleanup_phone, phone,
+            )
+        except Exception:
+            _LOGGER.debug("Listener not available; skipping teardown registration")
+
+    @staticmethod
+    def _cleanup_phone(phone):
+        try:
+            phone.hangup()
+        except Exception:
+            pass
+        phone.kill()
+```
+
+### Comparison with pytest-bdd
+
+| Aspect | pytest-bdd (`yield`) | Robot Framework (listener stack) |
+|--------|----------------------|----------------------------------|
+| **Registration** | `yield` in step function | `register_teardown()` call |
+| **Execution order** | LIFO (automatic) | LIFO (automatic) |
+| **Scope** | Per-test (via pytest fixture) | Per-test (via `end_test` hook) |
+| **Error handling** | Each teardown runs independently | Each teardown runs independently; failures are logged but don't block subsequent teardowns |
+| **Test file impact** | None (cleanup is in step_defs) | None (no `[Teardown]` needed in `.robot` files) |
+
+### What `end_test()` Does
+
+After every test, the listener executes three phases in order:
+
+1. **Drain teardown stack** — Pop and call every registered action (LIFO). Failures are logged as warnings but do not stop subsequent teardowns.
+2. **Refresh CPE console** — Disconnect and reconnect the CPE serial/SSH console to ensure it is in a clean state for the next test.
+3. **Clear library context** — Reset the per-test context dictionary on `BoardfarmLibrary` (`clear_test_context()`).
+
+### Verifying Cleanup in Logs
+
+In the Robot Framework console output and `log.html`, look for messages from the `boardfarm.robotframework` logger:
+
+```
+INFO  Teardown OK: Cleanup phone sip_phone_0
+INFO  Teardown OK: Restore password Device.Users.User.2.Password
+INFO  Teardown OK: Restart TR-069 client
+```
+
+If a teardown fails, it appears as a `WARNING` and execution continues:
+
+```
+WARNING  Teardown failed: Cleanup phone sip_phone_1: ConnectionError(...)
+WARNING  1 teardown(s) had errors
+```
+
+---
+
 ## Device Data Principles
 
 **All testbed-specific data comes from device objects**, not hard-coded variables or configuration files.
@@ -304,15 +413,50 @@ UC-12348: Voice Call Test
     # ... rest of test
 ```
 
-### Recommended Approach: Keyword Libraries
+### Recommended Project Structure
 
-Create scenario-aligned keyword libraries in your test project that delegate to `boardfarm3.use_cases`. This mirrors the pytest-bdd step_defs approach:
+Create keyword libraries alongside your test files, mirroring the pytest-bdd `step_defs` layout:
+
+```
+boardfarm-bdd/
+├── tests/                          # pytest-bdd tests
+│   ├── features/
+│   │   └── acs_operations.feature
+│   └── step_defs/
+│       └── acs_steps.py            # pytest-bdd step definitions
+│
+├── robot/                          # Robot Framework tests
+│   ├── tests/
+│   │   └── acs_operations.robot
+│   ├── libraries/
+│   │   └── acs_keywords.py         # Robot Framework keywords
+│   └── resources/
+│       └── common.resource         # Suite setup/teardown patterns
+│
+└── pyproject.toml
+```
+
+Both sides call the same `boardfarm3.use_cases` — the only difference is the decorator
+(`@when` vs `@keyword`) and the cleanup mechanism (`yield` vs `register_teardown`).
+
+### Keyword Libraries
+
+Create scenario-aligned keyword libraries in your test project that delegate to `boardfarm3.use_cases`:
 
 **Python Keyword Library** (`robot/libraries/acs_keywords.py`):
 
 ```python
+import logging
 from robot.api.deco import keyword
 from boardfarm3.use_cases import acs as acs_use_cases
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _get_listener():
+    from robotframework_boardfarm.listener import get_listener
+    return get_listener()
+
 
 class AcsKeywords:
     ROBOT_LIBRARY_SCOPE = "SUITE"
@@ -326,6 +470,21 @@ class AcsKeywords:
     def initiate_reboot(self, acs, cpe):
         """Initiate CPE reboot via ACS."""
         acs_use_cases.initiate_reboot(acs, cpe)
+
+    @keyword("The operator sets a CPE parameter")
+    def set_parameter(self, acs, cpe, path, value):
+        """Set a TR-069 parameter and register teardown to restore it."""
+        original = acs_use_cases.get_parameter_value(acs, cpe, path)
+        acs_use_cases.set_parameter_value(acs, cpe, path, value)
+
+        try:
+            _get_listener().register_teardown(
+                f"Restore {path}",
+                acs_use_cases.set_parameter_value,
+                acs, cpe, path, original,
+            )
+        except Exception:
+            _LOGGER.debug("Listener not available; skipping teardown registration")
 ```
 
 **Robot Test** (`robot/tests/reboot.robot`):
@@ -337,11 +496,16 @@ Library    ../libraries/acs_keywords.py
 
 *** Test Cases ***
 UC-12347: Remote CPE Reboot
+    [Documentation]    No [Teardown] needed — cleanup is automatic via the listener.
     ${acs}=    Get Device By Type    ACS
     ${cpe}=    Get Device By Type    CPE
     The CPE Is Online Via ACS    ${acs}    ${cpe}
     The ACS Initiates A Remote Reboot Of The CPE    ${acs}    ${cpe}
 ```
+
+> **Note**: The test does not have a `[Teardown]` section. Any state changes made by
+> the keyword libraries (e.g., password changes, service stops) are automatically
+> reversed by the listener when the test ends.
 
 ### Low-Level Device Access
 
@@ -361,8 +525,9 @@ def get_load_avg(self, cpe):
 | `@when("step text")` | `@keyword("step text")` |
 | `tests/step_defs/acs_steps.py` | `robot/libraries/acs_keywords.py` |
 | `boardfarm3.use_cases.acs` | `boardfarm3.use_cases.acs` (same) |
+| `yield` (registers teardown) | `register_teardown()` (same effect) |
 
-Both frameworks use the same `boardfarm3.use_cases` as the single source of truth.
+Both frameworks use the same `boardfarm3.use_cases` as the single source of truth, and both automatically clean up state-changing operations after each test — pytest-bdd via `yield`, Robot Framework via the listener's teardown stack.
 
 ---
 
@@ -411,29 +576,34 @@ Library           robotframework_boardfarm.BoardfarmLibrary
 Library           ../libraries/acs_keywords.py
 Library           ../libraries/cpe_keywords.py
 Suite Setup       Log    Starting Boardfarm tests
-Suite Teardown    Log    Completed Boardfarm tests
 
 *** Test Cases ***
 Test CPE Online
-    [Documentation]    Verify CPE is online via ACS
+    [Documentation]    Verify CPE is online via ACS.
     ${acs}=    Get Device By Type    ACS
     ${cpe}=    Get Device By Type    CPE
     The CPE Is Online Via ACS    ${acs}    ${cpe}
 
 Test CPE Reboot
-    [Documentation]    Test remote CPE reboot
+    [Documentation]    Test remote CPE reboot. No [Teardown] — password
+    ...               restoration and TR-069 restart are handled by the
+    ...               listener teardown stack.
     ${acs}=    Get Device By Type    ACS
     ${cpe}=    Get Device By Type    CPE
     The Operator Initiates A Reboot Task On The ACS For The CPE    ${acs}    ${cpe}
     The CPE Should Have Rebooted    ${cpe}
 
 Test With Environment Requirement
-    [Documentation]    Test requiring dual stack
+    [Documentation]    Test requiring dual stack.
     [Tags]    env_req:dual_stack
     Log Step    Environment validated
     ${cpe}=    Get Device By Type    CPE
     Log    Test passed with CPE: ${cpe}
 ```
+
+> **Suite Teardown** is not needed for per-test cleanup — the listener handles that
+> automatically. Use `Suite Teardown` only for suite-level resource release that is
+> not covered by `end_suite` (rare).
 
 ---
 
@@ -496,6 +666,7 @@ ruff format .
 | **Entry Point** | pytest plugin | Robot Framework listener |
 | **Device Access** | Fixtures | Keywords |
 | **Test Operations** | Step definitions → use_cases | Keyword libraries → use_cases |
+| **Per-test Cleanup** | `yield` in step functions (LIFO) | `register_teardown()` in keywords (LIFO) |
 | **Environment Req** | `@pytest.mark.env_req` | `[Tags] env_req:...` |
 | **Lifecycle** | pytest hooks | Listener API |
 | **Reports** | pytest-html integration | Robot Framework reports |
